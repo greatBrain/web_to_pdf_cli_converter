@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "web_to_pdf_cli_converter"
+version = "0.2.0"
+description = "Convierte artículos y posts web en PDFs legibles."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "beautifulsoup4>=4.12",
+    "requests>=2.31",
+    "rich>=13",
+    "weasyprint>=61",
+]
+
+[project.scripts]
+web-to-pdf = "web_to_pdf.cli:main"
+
+# Los módulos viven directamente en src/; se instalan como el paquete web_to_pdf.
+[tool.setuptools]
+packages = ["web_to_pdf"]
+package-dir = { web_to_pdf = "src" }

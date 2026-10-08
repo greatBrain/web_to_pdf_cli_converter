@@ -1,0 +1,2 @@
+class WebToPdfError(Exception):
+    pass

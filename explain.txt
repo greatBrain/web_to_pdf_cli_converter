@@ -1,0 +1,208 @@
+WEB-TO-PDF — CÓMO FUNCIONA POR DENTRO
+=====================================
+
+Resumen: descarga una página web, se queda solo con el contenido legible
+(el artículo), le aplica una hoja de estilos de "documento de lectura" y la
+renderiza a PDF con WeasyPrint.
+
+    URL ──> http.py ──> parser.py ──> pdf.py ──> archivo.pdf
+           (descarga)  (limpieza)   (CSS + render)
+                 └──────── orquestado por cli.py ────────┘
+
+
+1. DE "web-to-pdf URL" A TU CÓDIGO
+----------------------------------
+
+a) pyproject.toml declara el proyecto. Las dos partes que importan:
+
+     [project.scripts]
+     web-to-pdf = "web_to_pdf.cli:main"
+
+     [tool.setuptools]
+     packages = ["web_to_pdf"]
+     package-dir = { web_to_pdf = "src" }
+
+   - package-dir le dice a setuptools: "el paquete llamado web_to_pdf está
+     en la carpeta src/". Por eso en Python se importa como web_to_pdf
+     aunque en disco no exista ninguna carpeta con ese nombre.
+   - project.scripts define un comando de consola: "web-to-pdf" debe
+     llamar a la función main() del módulo web_to_pdf.cli (src/cli.py).
+
+b) Al hacer `pip install -e .` (lo incluye requirements.txt), pip:
+   - Instala las dependencias de [project].dependencies.
+   - Registra el paquete en el venv en modo "editable": en vez de copiar
+     src/, deja en site-packages un enlace (__editable__*.pth + un
+     "finder") que apunta a tu carpeta src/. Por eso tus cambios en el
+     código se ven sin reinstalar.
+   - Genera el ejecutable venv/bin/web-to-pdf, un script pequeño que hace
+     aproximadamente esto:
+
+         import sys
+         from web_to_pdf.cli import main
+         sys.exit(main())
+
+   Cuando activas el venv, venv/bin está en tu PATH, así que al escribir
+   `web-to-pdf URL` el shell encuentra ese script y lo ejecuta con el
+   Python del venv.
+
+c) `python -m web_to_pdf URL` es la otra vía: Python busca el paquete
+   web_to_pdf y ejecuta su __main__.py (src/__main__.py), que llama a la
+   misma main().
+
+d) Por qué NO funciona `python src/cli.py`:
+   - Los módulos se importan entre sí con imports relativos
+     (`from .http import fetch_html`). Eso solo funciona si el archivo se
+     carga como parte de un paquete; ejecutado como script suelto no
+     tiene paquete padre. cli.py lo detecta (`if not __package__`) y
+     muestra un mensaje en vez de un traceback.
+   - Además, ejecutar un script pone su carpeta (src/) al principio de
+     sys.path, y entonces src/http.py "taparía" al módulo http de la
+     librería estándar, que requests/urllib3 necesitan.
+
+   Regla: el código de src/ se instala, no se ejecuta suelto.
+
+
+2. LOS MÓDULOS
+--------------
+
+src/__init__.py
+   Convierte src/ en paquete y define WebToPdfError, la única excepción
+   propia. Todos los módulos traducen sus errores "esperables" (red, HTTP,
+   disco, página vacía) a WebToPdfError con `raise ... from exc`, que
+   conserva el error original como causa (__cause__) por si hay que
+   depurar.
+
+src/cli.py — orquestación y terminal
+   main(argv=None) -> int
+     1. build_parser(): argparse con `url` y `-o/--output`.
+     2. normalize_url(): si falta el esquema, añade https://.
+     3. resolve_output(): decide la ruta del PDF con pathlib:
+          sin -o              -> ./<slug>.pdf
+          -o carpeta/ (o dir) -> carpeta/<slug>.pdf
+          -o ruta/archivo.pdf -> esa ruta tal cual
+        slug_from_url() toma el último segmento de la URL, quita
+        extensiones (.html, .php...), pasa acentos a ASCII (unicodedata) y
+        deja solo [a-z0-9-]. Ej: /blog/Mi-Pósteo.html -> mi-posteo.pdf
+     4. Abre un spinner de Rich (console.status) y ejecuta en secuencia
+        fetch_html -> extract_article -> write_pdf, actualizando el
+        texto del spinner en cada etapa.
+     5. Gestión de salida:
+          éxito             -> imprime título y ruta, devuelve 0
+          WebToPdfError     -> mensaje rojo en stderr, devuelve 1
+          Ctrl-C            -> "Cancelado.", devuelve 130 (convención Unix)
+        El valor devuelto por main() acaba como código de salida del
+        proceso (sys.exit en el script generado por pip).
+   Los textos dinámicos (título, errores) pasan por rich.markup.escape
+   para que unos corchetes en un título no se interpreten como estilos.
+
+src/http.py — descarga
+   fetch_html(url) -> (html, url_final)
+   - requests.get con un User-Agent de navegador (muchos sitios devuelven
+     403 a clientes "raros") y timeout (5 s para conectar, 30 s para leer).
+   - Distingue timeout, error HTTP (404, 500...) y otros fallos de red,
+     con mensajes distintos.
+   - Rechaza respuestas que no son HTML (p. ej. JSON o PDF).
+   - Codificación: si la cabecera Content-Type no trae charset, requests
+     asume ISO-8859-1 y rompe los acentos. En ese caso se lee el
+     <meta charset> del propio HTML (EncodingDetector de bs4), con utf-8
+     como último recurso.
+   - Devuelve también response.url (la URL tras redirecciones), que luego
+     sirve como base para resolver imágenes y enlaces relativos.
+
+src/parser.py — extracción del contenido
+   extract_article(html) -> (titulo, html_limpio)
+   Pasos, en orden:
+     1. Quita comentarios HTML y las etiquetas de STRIP_TAGS en todo el
+        documento (script, style, nav, footer, aside, form, iframe...).
+        También quita los enlaces permalink (¶, #) de los títulos.
+     2. Elige el contenedor principal (_main_container):
+          el <article> con más texto  >  <main>  >  [role=main]  >  <body>
+     3. Título (_title): primer <h1> del contenedor > og:title >
+        <title> > "Sin título".
+     4. Si el contenedor es <body>, quita también los <header> (cabecera
+        del sitio).
+     5. Ruido por clase/id (_is_noise): elementos ocultos (hidden,
+        aria-hidden) o cuya clase/id empieza por comments, share, social,
+        related, newsletter, cookie, sidebar... (regex NOISE).
+     6. Saneado etiqueta por etiqueta (_sanitize), con lista blanca:
+        - div/section/... sin bloques dentro y con texto -> se convierten
+          en <p> (si no, dos divs seguidos acabarían con el texto pegado).
+        - div/section/... que envuelven bloques -> unwrap() (se quita la
+          etiqueta y se conservan los hijos).
+        - <img>: usa data-src/data-original si existen (lazy loading);
+          descarta imágenes sin src o con placeholders data:.
+        - Etiquetas fuera de KEEP_TAGS (span, picture...) -> unwrap().
+        - Atributos: se borran todos salvo los de KEEP_ATTRS (href, src,
+          alt...). Así desaparecen class, id y los style="" en línea.
+     7. Borra elementos que han quedado vacíos (de dentro hacia fuera,
+        recorriendo la lista al revés para que se vacíen en cascada).
+     8. Si no queda texto -> WebToPdfError (típico de páginas que se
+        construyen con JavaScript: requests solo ve el HTML inicial).
+     9. Si el contenido no tiene <h1>, inserta uno con el título.
+   Detalle técnico: decompose() destruye un nodo y todos sus hijos; si un
+   hijo ya destruido vuelve a aparecer en una lista, tocarlo daría error.
+   Por eso se comprueba tag.decomposed antes de operar.
+
+src/pdf.py — maquetación y render
+   build_document(): envuelve el HTML limpio en un documento completo con
+   <title> (WeasyPrint lo usa como título del PDF), la hoja STYLESHEET y
+   una línea final "Fuente: URL".
+   STYLESHEET:
+     - @page: A4, márgenes, número "página / total" abajo (@bottom-center).
+     - Texto en serif (Charter/Georgia/DejaVu Serif), títulos en sans,
+       11 pt, interlineado 1.55. Se usa la primera fuente de cada lista
+       que exista en el sistema (fontconfig).
+     - <pre> con fondo gris, saltos de línea forzados (pre-wrap) para que
+       el código no se salga de la página; break-after: avoid evita que
+       un título quede solo al final de una página.
+   write_pdf(): crea las carpetas intermedias (mkdir parents=True) y llama
+   a HTML(string=..., base_url=url_final).write_pdf(ruta). base_url
+   permite a WeasyPrint descargar imágenes con rutas relativas.
+   Los logs de WeasyPrint se bajan a nivel ERROR para que sus avisos
+   (imágenes que no carga, CSS no soportado) no ensucien el spinner.
+
+src/__main__.py
+   Permite `python -m web_to_pdf`. Solo llama a main().
+
+
+3. RECORRIDO COMPLETO DE UNA EJECUCIÓN
+--------------------------------------
+
+   $ web-to-pdf https://peps.python.org/pep-0636/ -o pdfs/
+
+   venv/bin/web-to-pdf
+     -> web_to_pdf.cli.main()
+        args.url = ".../pep-0636/", args.output = "pdfs/"
+        resolve_output -> pdfs/pep-0636.pdf
+        [spinner] Descargando página…
+          fetch_html -> (html, "https://peps.python.org/pep-0636/")
+        [spinner] Extrayendo contenido…
+          extract_article -> ("PEP 636 – Structural ...", "<h1>...</h1><p>...")
+        [spinner] Generando PDF…
+          write_pdf -> crea pdfs/ y escribe pdfs/pep-0636.pdf
+        ✔ PEP 636 – Structural Pattern Matching: Tutorial
+          Guardado en pdfs/pep-0636.pdf
+     <- return 0  (código de salida del proceso)
+
+
+4. LÍMITES CONOCIDOS
+--------------------
+
+- No ejecuta JavaScript: las páginas que se generan en el navegador (SPA)
+  llegan vacías -> error "No se encontró contenido legible".
+- La detección del contenido es heurística: en webs con HTML poco
+  semántico (sin <article>/<main>) puede colarse algo de ruido.
+- Las imágenes las descarga WeasyPrint durante el render; si un servidor
+  las bloquea, se omiten en silencio.
+- WeasyPrint necesita Pango del sistema (libpango), no solo el paquete pip.
+
+
+5. DÓNDE TOCAR PARA...
+----------------------
+
+- Cambiar el aspecto del PDF ............ STYLESHEET en pdf.py
+- Quitar/conservar más tipos de bloques . STRIP_TAGS, KEEP_TAGS, NOISE en parser.py
+- Timeout o User-Agent .................. TIMEOUT, USER_AGENT en http.py
+- Nuevas opciones de línea de comandos .. build_parser() y main() en cli.py
+- Nombre del comando .................... [project.scripts] en pyproject.toml
+  (tras cambiar pyproject.toml, repetir `pip install -e .`)

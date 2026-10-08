@@ -23,3 +23,6 @@ urllib3==2.5.0
 weasyprint==66.0
 webencodings==0.5.1
 zopfli==0.2.3.post1
+
+# Instala también el propio proyecto (comando web-to-pdf). Ejecutar desde la raíz del repo.
+-e .
