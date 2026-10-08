@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "web_to_pdf_cli_converter"
 version = "0.2.0"
-description = "Convierte artículos y posts web en PDFs legibles."
+description = "Convert web articles and blog posts into readable PDFs."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -18,7 +18,7 @@ dependencies = [
 [project.scripts]
 web-to-pdf = "web_to_pdf.cli:main"
 
-# Los módulos viven directamente en src/; se instalan como el paquete web_to_pdf.
+# The modules live directly in src/; they are installed as the web_to_pdf package.
 [tool.setuptools]
 packages = ["web_to_pdf"]
 package-dir = { web_to_pdf = "src" }

@@ -39,7 +39,7 @@ NOISE = re.compile(
 
 
 def extract_article(html: str) -> tuple[str, str]:
-    """Devuelve (título, html_del_cuerpo) con solo el contenido legible."""
+    """Return (title, body_html) with only the readable content."""
     soup = BeautifulSoup(html, "html.parser")
 
     for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
@@ -62,7 +62,7 @@ def extract_article(html: str) -> tuple[str, str]:
             tag.decompose()
 
     if not container.get_text(strip=True):
-        raise WebToPdfError("No se encontró contenido legible (¿la página se renderiza con JavaScript?)")
+        raise WebToPdfError("No readable content found (is the page rendered with JavaScript?)")
 
     if container.find("h1") is None:
         heading = soup.new_tag("h1")
@@ -85,7 +85,7 @@ def _title(soup: BeautifulSoup, container: Tag) -> str:
         return og["content"].strip()
     if soup.title and soup.title.string:
         return soup.title.string.strip()
-    return "Sin título"
+    return "Untitled"
 
 
 def _is_noise(tag: Tag) -> bool:
@@ -98,7 +98,7 @@ def _is_noise(tag: Tag) -> bool:
 
 def _sanitize(tag: Tag) -> None:
     if tag.name in WRAPPER_TAGS:
-        # Un div "hoja" con texto es un párrafo de facto; si envuelve bloques, sobra.
+        # A "leaf" div with text is a de facto paragraph; if it wraps blocks, it is redundant.
         if tag.find(BLOCK_TAGS) is None and tag.get_text(strip=True):
             tag.name = "p"
         else:

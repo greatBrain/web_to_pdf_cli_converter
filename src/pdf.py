@@ -6,7 +6,7 @@ from weasyprint import HTML
 
 from . import WebToPdfError
 
-# WeasyPrint avisa por cada imagen o propiedad CSS que no puede resolver; ensucia el spinner.
+# WeasyPrint warns about every image or CSS property it cannot resolve; it clutters the spinner.
 logging.getLogger("weasyprint").setLevel(logging.ERROR)
 logging.getLogger("fontTools").setLevel(logging.ERROR)
 
@@ -82,7 +82,7 @@ def build_document(title: str, body: str, source_url: str) -> str:
 </head>
 <body>
 {body}
-<p class="source">Fuente: <a href="{escape(source_url)}">{escape(source_url)}</a></p>
+<p class="source">Source: <a href="{escape(source_url)}">{escape(source_url)}</a></p>
 </body>
 </html>"""
 
@@ -93,4 +93,4 @@ def write_pdf(title: str, body: str, source_url: str, output: Path) -> None:
         output.parent.mkdir(parents=True, exist_ok=True)
         HTML(string=document, base_url=source_url).write_pdf(output)
     except OSError as exc:
-        raise WebToPdfError(f"No se pudo escribir {output}: {exc}") from exc
+        raise WebToPdfError(f"Could not write {output}: {exc}") from exc

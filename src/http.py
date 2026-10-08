@@ -16,7 +16,7 @@ def normalize_url(url: str) -> str:
 
 
 def fetch_html(url: str) -> tuple[str, str]:
-    """Devuelve (html, url_final) tras seguir redirecciones."""
+    """Return (html, final_url) after following redirects."""
     try:
         response = requests.get(
             url,
@@ -25,15 +25,15 @@ def fetch_html(url: str) -> tuple[str, str]:
         )
         response.raise_for_status()
     except requests.Timeout as exc:
-        raise WebToPdfError(f"Tiempo de espera agotado al descargar {url}") from exc
+        raise WebToPdfError(f"Timed out while downloading {url}") from exc
     except requests.HTTPError as exc:
-        raise WebToPdfError(f"El servidor respondió {exc.response.status_code} para {url}") from exc
+        raise WebToPdfError(f"The server responded {exc.response.status_code} for {url}") from exc
     except requests.RequestException as exc:
-        raise WebToPdfError(f"No se pudo descargar {url}: {exc}") from exc
+        raise WebToPdfError(f"Could not download {url}: {exc}") from exc
 
     content_type = response.headers.get("Content-Type", "").lower()
     if content_type and "html" not in content_type:
-        raise WebToPdfError(f"La URL no devuelve HTML (Content-Type: {content_type})")
+        raise WebToPdfError(f"The URL does not return HTML (Content-Type: {content_type})")
     
     if "charset=" not in content_type:
         response.encoding = (
